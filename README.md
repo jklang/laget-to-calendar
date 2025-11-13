@@ -69,6 +69,29 @@ Credentials are searched in this order:
 3. Config file (`~/.config/laget-scraper/config.toml`)
 4. Interactive prompt
 
+## Command Reference
+
+```
+$ python laget_scraper.py --help
+
+Usage: laget_scraper.py [OPTIONS] COMMAND [ARGS]...
+
+Commands:
+  scrape        Scrape registrations and create iCal calendar file
+  init-config   Create a configuration file with your credentials
+
+$ python laget_scraper.py scrape --help
+
+Options:
+  -e, --email TEXT              Laget.se email address
+  -p, --password TEXT           Laget.se password
+  -o, --output TEXT             Output filename [default: laget_registrations.ics]
+  -c, --config PATH             Config file path [default: ~/.config/laget-scraper/config.toml]
+  --include-practice            Include practice events (Träning) [default: exclude]
+  --exclude-practice
+  --help                        Show this message and exit
+```
+
 ## License
 
 Personal tool. Use at your own risk.
