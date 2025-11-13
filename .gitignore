@@ -45,3 +45,4 @@ Thumbs.db
 
 # Sensitive files - DO NOT COMMIT
 # If you've modified laget_scraper.py with real credentials, be careful!
+.claude/mcp.json
