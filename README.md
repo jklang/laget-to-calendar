@@ -53,6 +53,7 @@ python laget_scraper.py scrape --output events.ics
 - Extracts event details (title, date, time, location, team, child name)
 - Uses "Samling" time as calendar start when available
 - Excludes practice events by default
+- Automatic reminders: 1 day before and 2 hours before each event
 - Creates iCal files compatible with all calendar apps
 
 ## Import to Calendar

@@ -7,11 +7,11 @@ import os
 from pathlib import Path
 from typing import List, Dict, Optional
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from bs4 import BeautifulSoup
-from icalendar import Calendar, Event
+from icalendar import Calendar, Event, Alarm
 import pytz
 import typer
 from rich.console import Console
@@ -200,8 +200,6 @@ class LagetSeScraper:
         Returns:
             Tuple of (start_datetime, end_datetime)
         """
-        from datetime import timedelta
-
         # Swedish months mapping
         months_sv = {
             'januari': 1, 'februari': 2, 'mars': 3, 'april': 4,
@@ -372,6 +370,21 @@ class LagetSeScraper:
 
             # Add timestamp
             event.add('dtstamp', datetime.now(pytz.UTC))
+
+            # Add reminders/alarms
+            # 1 day before
+            alarm_1day = Alarm()
+            alarm_1day.add('action', 'DISPLAY')
+            alarm_1day.add('description', f"Reminder: {title} tomorrow")
+            alarm_1day.add('trigger', timedelta(days=-1))
+            event.add_component(alarm_1day)
+
+            # 2 hours before
+            alarm_2hours = Alarm()
+            alarm_2hours.add('action', 'DISPLAY')
+            alarm_2hours.add('description', f"Reminder: {title} in 2 hours")
+            alarm_2hours.add('trigger', timedelta(hours=-2))
+            event.add_component(alarm_2hours)
 
             cal.add_component(event)
             console.print(f"  ✓ Added: {title}", style="green")
