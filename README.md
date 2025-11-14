@@ -1,5 +1,7 @@
 # Laget.se to iCal Converter
 
+> **Note:** This project was developed using [Claude Code](https://claude.ai/code), an AI-powered coding assistant. All code, documentation, and features were generated through AI-assisted development.
+
 Converts your laget.se registrations into iCal calendar entries with automatic calendar synchronization.
 
 ## Installation
