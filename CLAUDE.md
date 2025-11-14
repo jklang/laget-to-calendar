@@ -1,147 +1,239 @@
-# CLAUDE.md
+# Claude Code Project Documentation
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This document provides information for AI assistants (like Claude) working on this project.
 
 ## Project Overview
 
-This is a Python CLI tool that scrapes sports event registrations from laget.se and automatically syncs them to calendar applications. It converts Swedish sports team registrations into calendar events with automatic synchronization to macOS Calendar and/or Google Calendar.
+**laget-to-calendar** is a Python-based web scraper that fetches event registrations from laget.se and syncs them to calendar applications. It supports automatic calendar synchronization to both macOS Calendar (via EventKit) and Google Calendar (via Google Calendar API).
 
-## Core Architecture
+## Key Features
 
-### Main Components
+- Web scraping of laget.se "Mina anmälningar" (My Registrations)
+- Extraction of event details: title, date, time, location, team, child name, attendee list
+- iCalendar (.ics) file generation
+- Automatic calendar synchronization (macOS Calendar and/or Google Calendar)
+- Smart event updates (detects and updates changed events)
+- Event reminders (1 day and 2 hours before)
+- Practice event filtering (excluded by default)
 
-1. **laget_scraper.py** - Main entry point with Typer CLI
-   - `LagetSeScraper` class: Handles authentication, scraping, and data extraction from laget.se
-   - Two commands: `scrape` (fetch and sync events) and `init-config` (create config file)
-   - Credential management with 4-tier priority: CLI args → env vars → config file → interactive prompt
+## Technology Stack
 
-2. **calendar_integrations.py** - Calendar sync backends
-   - `CalendarIntegration` (abstract base): Defines interface for calendar backends
-   - `MacOSCalendarIntegration`: Uses PyObjC/EventKit to sync with macOS Calendar
-   - `GoogleCalendarIntegration`: Uses Google Calendar API with OAuth 2.0
-   - Smart sync logic: tracks events by UID, updates changed events, avoids duplicates
+- **Python 3.x** with virtual environment
+- **Web Scraping**: requests, BeautifulSoup4
+- **Calendar**: icalendar, pytz
+- **CLI**: typer, rich (for colored terminal output)
+- **Configuration**: PyYAML
+- **macOS Calendar**: PyObjC (EventKit, Cocoa frameworks)
+- **Google Calendar**: google-api-python-client, google-auth
+- **MCP Tools**: Chrome DevTools MCP (for inspecting JavaScript-loaded content)
 
-### Data Flow
+## Project Structure
 
 ```
-laget.se login → fetch registrations → filter/parse → [.ics file + calendar sync]
-                                                            ↓
-                                            convert to standardized event format
-                                                            ↓
-                                    macOS Calendar ← sync → Google Calendar
-                                        (via EventKit)        (via OAuth API)
+laget-to-calendar/
+├── laget_scraper.py           # Main scraper and CLI entry point
+├── calendar_integrations.py   # Calendar sync implementations (macOS, Google)
+├── requirements.txt           # Python dependencies
+├── README.md                  # User documentation
+├── CLAUDE.md                  # This file - AI assistant documentation
+├── docs/
+│   └── google-calendar-setup.md  # Google Calendar API setup guide
+├── test_attendees.py          # Debug script (not committed)
+└── .gitignore
 ```
 
-### Configuration
+## Important Code Locations
 
-- **Format**: YAML (migrated from TOML)
-- **Location**: `~/.config/laget-scraper/config.yaml`
-- **Structure**:
-  ```yaml
-  credentials:
-    email: "..."
-    password: "..."
-  calendar:
-    mode: "none|macos|google|both"
-    calendar_name: null  # null = default/primary calendar
-    google_credentials_file: "path/to/credentials.json"
-  ```
+### Main Scraper Class: `LagetSeScraper`
 
-### Event Tracking & Updates
+**File**: `laget_scraper.py`
 
-- Events are identified by UID format: `laget-{pk}-{childId}@laget.se`
-- For macOS: UID stored in event notes field (searched via date range query)
-- For Google: UID stored in extended properties (queried via API)
-- Event comparison checks: title, start, end, location, description
-- Updates are applied to existing events rather than creating duplicates
+Key methods:
+- `login()` - Authenticates with laget.se
+- `get_registrations()` - Fetches list of registrations
+- `get_registration_details(pk, child_id, site)` - Extracts detailed event info including attendees
+- `parse_datetime(date_str, time_str, samling_str)` - Parses Swedish date/time strings
+- `create_ical_calendar(registrations, filename)` - Generates .ics file
 
-## Development Commands
+### Calendar Integration
+
+**File**: `calendar_integrations.py`
+
+Classes:
+- `MacOSCalendarIntegration` - EventKit-based macOS Calendar sync
+- `GoogleCalendarIntegration` - Google Calendar API integration
+
+Both implement:
+- `authenticate()` - Authentication/authorization
+- `sync_events(events)` - Sync event list to calendar
+- `add_event(event_data)` - Add single event
+- `update_event(uid, event_data)` - Update existing event
+
+## Web Scraping Details
+
+### Authentication
+- URL: `https://www.laget.se/Common/Auth/Login`
+- Session-based authentication with cookies
+- Credentials stored in `~/.config/laget-scraper/config.yaml`
+
+### Data Extraction
+
+**Registration List**
+- URL: `https://www.laget.se/` (requires authenticated session)
+- Parsed from modal popup opened via JavaScript
+- Each registration has: `pk` (primary key), `childId`, `site` parameters
+
+**Registration Details**
+- URL: `https://www.laget.se/Common/Rsvp/ModalContent`
+- Query params: `pk`, `childId`, `site`
+- **Important**: Content is JavaScript-loaded, returns empty HTML when accessed directly via HTTP
+- Must be inspected using browser DevTools or rendered browser context
+
+**Attendee List HTML Structure** (JavaScript-loaded):
+
+```html
+<ul class="attendingsList__list">
+  <li class="attendingsList__row">
+    <div class="attendingsList__cell">Attendee Name</div>
+    <div class="attendingsList__cell--gray">...</div>
+  </li>
+  <!-- More attendees... -->
+</ul>
+```
+
+CSS Selectors used:
+
+- `ul.attendingsList__list` - Container
+- `li.attendingsList__row` - Each attendee row
+- `div.attendingsList__cell` - First cell contains the name
+
+## MCP Configuration
+
+### Chrome DevTools MCP
+
+This project benefits from Chrome DevTools MCP for inspecting JavaScript-loaded content on laget.se.
+
+**When to use Chrome MCP:**
+- Inspecting dynamic content that doesn't appear in HTTP responses
+- Finding correct CSS selectors for newly added fields
+- Debugging why scraping isn't working for specific elements
+
+**Example usage from this project:**
+The attendee list feature required Chrome DevTools MCP because:
+1. Direct HTTP GET to `/Common/Rsvp/ModalContent` returned empty HTML
+2. Content is loaded via JavaScript after page render
+3. Used `take_snapshot()` to inspect the rendered DOM
+4. Used `evaluate_script()` to extract attendee names and verify structure
+
+**Relevant MCP tools used:**
+- `navigate_page` - Navigate to laget.se pages
+- `take_snapshot` - Get accessibility tree snapshot of rendered page
+- `evaluate_script` - Execute JavaScript to inspect/extract data
+- `click` - Interact with page elements
+
+## Configuration Files
+
+### User Config: `~/.config/laget-scraper/config.yaml`
+
+```yaml
+credentials:
+  email: "user@example.com"
+  password: "password"
+
+calendar:
+  mode: "macos"  # none, macos, google, both
+  calendar_name: null  # or specify custom calendar name
+  google_credentials_file: "~/.config/laget-scraper/credentials.json"
+```
+
+Created via: `python laget_scraper.py init-config`
+
+### Google Calendar Setup
+
+Requires OAuth 2.0 credentials from Google Cloud Console. See `docs/google-calendar-setup.md` for detailed setup instructions.
+
+## Development Workflow
+
+### Running the Scraper
 
 ```bash
-# Setup environment
-python3 -m venv venv
+# Activate virtual environment
 source venv/bin/activate
-pip install -r requirements.txt
 
-# Run the scraper
-python laget_scraper.py scrape [--calendar-mode macos|google|both]
+# Run with default config
+python laget_scraper.py scrape
 
-# Create config file (interactive)
-python laget_scraper.py init-config
+# Run with calendar sync
+python laget_scraper.py scrape --calendar-mode macos
 
-# Run with specific calendar
-python laget_scraper.py scrape --calendar-mode macos --calendar-name "Kids Sports"
-
-# Test syntax
-python -m py_compile laget_scraper.py calendar_integrations.py
-
-# View help
-python laget_scraper.py --help
-python laget_scraper.py scrape --help
+# Include practice events
+python laget_scraper.py scrape --include-practice
 ```
 
-## Calendar Integration Details
+### Testing Changes
 
-### macOS Calendar (EventKit)
+1. Run scraper with `--include-practice` to get more test data
+2. Check generated `.ics` file for correctness
+3. Test calendar sync if applicable
+4. Verify event descriptions contain expected information
 
-- Uses PyObjC to bridge Python → Objective-C → EventKit framework
-- First run requests calendar permission via `requestAccessToEntityType_completion_`
-- Default calendar: `eventStore.defaultCalendarForNewEvents`
-- Custom calendar: searches by title, creates if not found
-- Event lookup: searches within 1-year window (past/future) for UID marker in notes
-- Platform check: Only loads EventKit on `sys.platform == 'darwin'`
+### Common Issues
 
-### Google Calendar
+**Empty HTML responses**: Content is JavaScript-loaded. Use Chrome DevTools MCP to inspect the actual rendered DOM.
 
-- OAuth 2.0 flow using Desktop app credentials
-- Token stored in `~/.config/laget-scraper/token.json` after first auth
-- Uses extended properties: `{'private': {'lagetUid': 'laget-...'}}` for UID tracking
-- Primary calendar: calendar ID = `"primary"`
-- Custom calendar: lists all calendars, creates if name not found
-- Timezone: Hard-coded to `Europe/Stockholm`
+**Authentication failures**: Check that credentials in config are correct and that session is maintained.
 
-## Key Implementation Patterns
+**Calendar access denied**: macOS Calendar requires explicit permission grant in System Settings > Privacy & Security > Calendars.
 
-### Datetime Handling
+## Git Workflow
 
-- Swedish month names parsed via dictionary mapping
-- Timezone: `pytz.timezone('Europe/Stockholm')`
-- "Samling" time (gathering time) used as start time if available, otherwise uses event time
-- Year inference: uses current year, assumes events are future/current year
+- Main development branch: `calendar-integration`
+- Main branch: Used for releases
+- Commit messages: Descriptive, focus on what and why
 
-### Web Scraping Strategy
+## Code Style
 
-- Session-based with CSRF token extraction from login page
-- BeautifulSoup for HTML parsing
-- Modal-based navigation: finds registration links via `/Common/Rsvp/ModalContent` pattern
-- Extracts: title, team, child name, date, time, location, address, deadline, samling, description
+- Python 3.x with type hints where beneficial
+- Rich console output for user feedback
+- Comprehensive error handling with user-friendly messages
+- Swedish terminology in comments where referring to laget.se UI elements
 
-### Error Handling Philosophy
+## Recent Changes
 
-- Calendar sync failures fall back gracefully (always creates .ics backup)
-- Missing/invalid event data: events skipped with warnings, doesn't stop entire sync
-- Permission denied: clear user guidance pointing to system settings
+### PR #2: Add attendee list to calendar events
+- Extracts attendee names from registration details
+- Displays in format: "Deltagare (count):" with bulleted names
+- Required Chrome DevTools MCP to identify correct HTML structure
+- Works with all calendar modes (.ics, macOS, Google, both)
 
-## Dependencies & Platform Notes
+### Previous Features
+- Calendar integration (macOS via EventKit, Google via API)
+- Smart event updates with UID tracking
+- Automatic reminders (1 day and 2 hours before)
+- Practice event filtering
+- Configuration file support (YAML)
 
-- **macOS only**: `pyobjc-framework-EventKit`, `pyobjc-framework-Cocoa` (conditional via `sys_platform == 'darwin'`)
-- **Google Calendar**: Requires OAuth setup (see `docs/google-calendar-setup.md`)
-- **Rich**: Used for styled console output (cyan/green/red/yellow styles, progress bars)
-- **Typer**: CLI framework with automatic help generation
+## Testing Approach
 
-## Testing a Calendar Integration Change
+Manual testing workflow:
+1. Run scraper to fetch current registrations
+2. Inspect generated `.ics` file
+3. Check event details (title, time, location, description, attendees)
+4. Verify calendar sync works (if enabled)
+5. Confirm events update correctly on subsequent runs
 
-When modifying calendar integration logic:
+## Future Enhancement Ideas
 
-1. For macOS: May need to reset Calendar permissions in System Settings
-2. For Google: Delete `~/.config/laget-scraper/token.json` to re-authenticate
-3. Test with a single event first (limit registrations manually if needed)
-4. Check both add and update scenarios
-5. Verify UID tracking works (run twice, ensure no duplicates on second run)
+- Add support for more event types
+- Extract and include additional metadata (event costs, equipment lists, etc.)
+- Support for multiple children/accounts
+- Web UI for configuration
+- Docker containerization for scheduled syncs
 
-## Important Behavioral Notes
+## Notes for AI Assistants
 
-- Practice events ("Träning") are excluded by default unless `--include-practice` specified
-- Reminders are always added: -1 day and -2 hours relative to event start
-- `.ics` file is always generated even when calendar sync is enabled (serves as backup)
-- Config file permissions are set to 600 (owner read/write only) for security
+1. **Always use Chrome DevTools MCP** when inspecting laget.se for new fields, as much content is JavaScript-loaded
+2. **Preserve existing functionality** - This is actively used by a real user
+3. **Test thoroughly** - The scraper accesses a live website and real calendar data
+4. **Document breaking changes** - Update README and this file with significant changes
+5. **Swedish context** - The target website is Swedish, keep Swedish UI element names in comments for clarity
