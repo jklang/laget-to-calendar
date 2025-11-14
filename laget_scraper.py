@@ -16,7 +16,9 @@ import pytz
 import typer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
-import tomli
+import yaml
+
+from calendar_integrations import MacOSCalendarIntegration, GoogleCalendarIntegration
 
 app = typer.Typer(help="Scrape registrations from laget.se and create iCal calendar entries")
 console = Console()
@@ -398,12 +400,91 @@ class LagetSeScraper:
 
 
 def load_config(config_file: Path) -> Dict:
-    """Load configuration from TOML file"""
+    """Load configuration from YAML file"""
     if not config_file.exists():
         return {}
 
-    with open(config_file, 'rb') as f:
-        return tomli.load(f)
+    with open(config_file, 'r') as f:
+        config = yaml.safe_load(f)
+        return config if config else {}
+
+
+def convert_registrations_to_events(registrations: List[Dict], scraper: LagetSeScraper) -> List[Dict]:
+    """
+    Convert registration data to standardized event format for calendar integrations
+
+    Args:
+        registrations: List of registration dictionaries from scraper
+        scraper: LagetSeScraper instance (for parse_datetime method)
+
+    Returns:
+        List of event dictionaries with standardized fields
+    """
+    events = []
+
+    for reg in registrations:
+        # Parse date/time
+        date_str = reg.get('date', '')
+        time_str = reg.get('time', '')
+        samling_str = reg.get('samling')
+
+        if not date_str or not time_str:
+            continue
+
+        start_dt, end_dt = scraper.parse_datetime(date_str, time_str, samling_str)
+
+        if not start_dt or not end_dt:
+            continue
+
+        # Build event title
+        title = reg.get('title', 'Event')
+        child_name = reg.get('child_name', '')
+        if child_name:
+            title = f"{title} - {child_name}"
+
+        # Build location
+        location = reg.get('location', '')
+        address = reg.get('address', '')
+        if location and address:
+            location = f"{location}, {address}"
+        elif location:
+            location = location
+        else:
+            location = ''
+
+        # Build description
+        description_parts = []
+        team = reg.get('team', '')
+        if team:
+            description_parts.append(f"Lag: {team}")
+
+        desc = reg.get('description', '')
+        if desc:
+            description_parts.append(f"\n{desc}")
+
+        map_url = reg.get('map_url', '')
+        if map_url:
+            description_parts.append(f"\n\nKarta: {map_url}")
+
+        description = '\n'.join(description_parts)
+
+        # Build UID
+        uid = f"laget-{reg.get('pk')}-{reg.get('childId')}@laget.se"
+
+        # Add alarms (1 day and 2 hours before)
+        alarms = [-86400, -7200]  # seconds
+
+        events.append({
+            'title': title,
+            'start': start_dt,
+            'end': end_dt,
+            'location': location,
+            'description': description,
+            'uid': uid,
+            'alarms': alarms
+        })
+
+    return events
 
 
 def get_credentials(
@@ -432,9 +513,10 @@ def get_credentials(
 
     # Try config file
     config = load_config(config_file)
-    if 'email' in config and 'password' in config:
+    credentials = config.get('credentials', {})
+    if 'email' in credentials and 'password' in credentials:
         console.print(f"Using credentials from config file: {config_file}", style="dim")
-        return config['email'], config['password']
+        return credentials['email'], credentials['password']
 
     # Fall back to interactive prompt
     console.print("\n[yellow]No credentials found. Please enter them now:[/yellow]")
@@ -469,7 +551,7 @@ def scrape(
         help="Output filename for the iCal file"
     ),
     config_file: Path = typer.Option(
-        Path.home() / ".config" / "laget-scraper" / "config.toml",
+        Path.home() / ".config" / "laget-scraper" / "config.yaml",
         "--config",
         "-c",
         help="Path to config file"
@@ -478,6 +560,21 @@ def scrape(
         False,
         "--include-practice/--exclude-practice",
         help="Include practice events (Träning). Default is to exclude them."
+    ),
+    calendar_mode: Optional[str] = typer.Option(
+        None,
+        "--calendar-mode",
+        help="Calendar integration mode: 'none', 'macos', 'google', or 'both'"
+    ),
+    calendar_name: Optional[str] = typer.Option(
+        None,
+        "--calendar-name",
+        help="Name of calendar to use (defaults to default/primary calendar)"
+    ),
+    google_credentials_file: Optional[str] = typer.Option(
+        None,
+        "--google-credentials-file",
+        help="Path to Google Calendar OAuth credentials JSON file"
     ),
 ):
     """
@@ -488,8 +585,14 @@ def scrape(
     Credentials can be provided via:
     - Command line arguments (--email, --password)
     - Environment variables (LAGET_EMAIL, LAGET_PASSWORD)
-    - Config file (default: ~/.config/laget-scraper/config.toml)
+    - Config file (default: ~/.config/laget-scraper/config.yaml)
     - Interactive prompt
+
+    Calendar integration modes:
+    - none: Only create .ics file (default)
+    - macos: Sync to macOS Calendar app
+    - google: Sync to Google Calendar
+    - both: Sync to both macOS and Google Calendar
     """
 
     console.print("\n[bold cyan]Laget.se to iCal Converter[/bold cyan]")
@@ -527,25 +630,80 @@ def scrape(
 
     console.print(f"\n[green]✓ Found {len(registrations)} registrations to export[/green]")
 
-    # Create iCal file
+    # Create iCal file (always create as backup)
     filename = scraper.create_ical_calendar(registrations, output)
 
+    # Calendar integration
+    config = load_config(config_file)
+    calendar_config = config.get('calendar', {})
+
+    # Determine calendar mode (CLI arg overrides config)
+    mode = calendar_mode or calendar_config.get('mode', 'none')
+    cal_name = calendar_name or calendar_config.get('calendar_name')
+    google_creds = google_credentials_file or calendar_config.get('google_credentials_file')
+
+    if mode and mode != 'none':
+        console.print("\n" + "=" * 60)
+        console.print("[bold cyan]Calendar Integration[/bold cyan]")
+        console.print("=" * 60 + "\n")
+
+        # Convert registrations to event format
+        events = convert_registrations_to_events(registrations, scraper)
+
+        if not events:
+            console.print("[yellow]⚠ No events could be converted for calendar sync[/yellow]")
+        else:
+            sync_results = {}
+
+            # macOS Calendar integration
+            if mode in ('macos', 'both'):
+                console.print("[cyan]Syncing to macOS Calendar...[/cyan]")
+                macos_cal = MacOSCalendarIntegration(calendar_name=cal_name)
+
+                if macos_cal.authenticate():
+                    added, updated, errors = macos_cal.sync_events(events)
+                    sync_results['macos'] = (added, updated, errors)
+                    console.print(f"[green]✓ macOS Calendar: {added} added, {updated} updated, {errors} errors[/green]\n")
+                else:
+                    console.print("[red]✗ Failed to connect to macOS Calendar[/red]\n")
+
+            # Google Calendar integration
+            if mode in ('google', 'both'):
+                console.print("[cyan]Syncing to Google Calendar...[/cyan]")
+                google_cal = GoogleCalendarIntegration(calendar_name=cal_name, credentials_file=google_creds)
+
+                if google_cal.authenticate():
+                    added, updated, errors = google_cal.sync_events(events)
+                    sync_results['google'] = (added, updated, errors)
+                    console.print(f"[green]✓ Google Calendar: {added} added, {updated} updated, {errors} errors[/green]\n")
+                else:
+                    console.print("[red]✗ Failed to connect to Google Calendar[/red]\n")
+
+            if sync_results:
+                console.print("=" * 60)
+                console.print("[bold green]Calendar sync complete![/bold green]")
+                console.print(f"[dim]Backup .ics file saved to: {filename}[/dim]")
+                console.print("=" * 60 + "\n")
+                return
+
+    # No calendar integration
     console.print("\n" + "=" * 60)
     console.print(f"[bold green]Done! You can now import '{filename}' into your calendar app.[/bold green]")
+    console.print("[dim]Tip: Enable automatic calendar sync with --calendar-mode (macos|google|both)[/dim]")
     console.print("=" * 60 + "\n")
 
 
 @app.command()
 def init_config(
     config_file: Path = typer.Option(
-        Path.home() / ".config" / "laget-scraper" / "config.toml",
+        Path.home() / ".config" / "laget-scraper" / "config.yaml",
         "--config",
         "-c",
         help="Path to config file to create"
     ),
 ):
     """
-    Create a configuration file with your credentials.
+    Create a configuration file with your credentials and calendar settings.
     """
 
     if config_file.exists():
@@ -557,23 +715,74 @@ def init_config(
     console.print("\n[bold cyan]Creating configuration file[/bold cyan]")
     console.print(f"Location: {config_file}\n")
 
+    # Get credentials
     email = typer.prompt("Email")
     password = typer.prompt("Password", hide_input=True)
+
+    # Get calendar preferences
+    console.print("\n[cyan]Calendar Integration Settings (optional)[/cyan]")
+    console.print("[dim]Press Enter to skip or use defaults[/dim]\n")
+
+    calendar_mode = typer.prompt(
+        "Calendar mode (none/macos/google/both)",
+        default="none",
+        show_default=True
+    )
+
+    calendar_name = None
+    if calendar_mode != "none":
+        use_custom_calendar = typer.confirm(
+            "Use a custom calendar name? (No = use default/primary calendar)",
+            default=False
+        )
+        if use_custom_calendar:
+            calendar_name = typer.prompt("Calendar name", default="Laget.se Anmälningar")
+
+    google_creds = None
+    if calendar_mode in ("google", "both"):
+        google_creds = typer.prompt(
+            "Google credentials file path",
+            default=str(Path.home() / ".config" / "laget-scraper" / "credentials.json")
+        )
 
     # Create directory if it doesn't exist
     config_file.parent.mkdir(parents=True, exist_ok=True)
 
+    # Build config dictionary
+    config = {
+        'credentials': {
+            'email': email,
+            'password': password
+        },
+        'calendar': {
+            'mode': calendar_mode
+        }
+    }
+
+    if calendar_name:
+        config['calendar']['calendar_name'] = calendar_name
+    else:
+        config['calendar']['calendar_name'] = None
+
+    if google_creds:
+        config['calendar']['google_credentials_file'] = google_creds
+
     # Write config file
     with open(config_file, 'w') as f:
-        f.write(f'# Laget.se Scraper Configuration\n')
-        f.write(f'email = "{email}"\n')
-        f.write(f'password = "{password}"\n')
+        f.write('# Laget.se Scraper Configuration\n\n')
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
     # Set restrictive permissions
     config_file.chmod(0o600)
 
     console.print(f"\n[green]✓ Config file created at: {config_file}[/green]")
-    console.print(f"[dim]File permissions set to 600 (owner read/write only)[/dim]\n")
+    console.print(f"[dim]File permissions set to 600 (owner read/write only)[/dim]")
+
+    if calendar_mode in ("google", "both") and google_creds:
+        console.print(f"\n[yellow]⚠ Don't forget to set up Google Calendar API credentials![/yellow]")
+        console.print(f"[dim]See docs/google-calendar-setup.md for instructions[/dim]")
+
+    console.print()
 
 
 if __name__ == "__main__":
