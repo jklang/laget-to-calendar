@@ -178,8 +178,8 @@ You can schedule the scraper to run automatically using cron (macOS/Linux):
 # Edit crontab
 crontab -e
 
-# Add line to run daily at 8 AM
-0 8 * * * cd /path/to/laget-to-calendar && /path/to/venv/bin/python laget_scraper.py scrape
+# Every hour during waking hours (7:00 - 20:00):
+0 7-20 * * * cd /Users/joakim.klang/git/laget-to-calendar && /Users/joakim.klang/git/laget-to-calendar/venv/bin/python laget_scraper.py scrape --calendar-mode macos --calendar-name "Forza HSK" >> /tmp/laget-scraper.log 2>&1
 ```
 
 ## License
