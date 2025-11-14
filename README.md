@@ -57,7 +57,7 @@ python laget_scraper.py scrape --calendar-mode both
 
 **Use a custom calendar:**
 ```bash
-python laget_scraper.py scrape --calendar-mode macos --calendar-name "Kids Sports"
+python laget_scraper.py scrape --calendar-mode macos --calendar-name "Forza HSK"
 ```
 
 ### Other Options
