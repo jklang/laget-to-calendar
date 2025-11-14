@@ -188,6 +188,23 @@ class LagetSeScraper:
         else:
             details['map_url'] = ''
 
+        # Attendees list - look for attendingsList__list
+        attendees = []
+
+        # Find the attendees list by class name
+        attendees_list = soup.find('ul', class_='attendingsList__list')
+        if attendees_list:
+            # Each attendee is in an <li> with class attendingsList__row
+            for row in attendees_list.find_all('li', class_='attendingsList__row'):
+                # The name is in the first div with class attendingsList__cell
+                name_div = row.find('div', class_='attendingsList__cell')
+                if name_div:
+                    name = name_div.get_text(strip=True)
+                    if name:
+                        attendees.append(name)
+
+        details['attendees'] = attendees
+
         return details
 
     def parse_datetime(self, date_str: str, time_str: str, samling_str: Optional[str] = None) -> tuple:
@@ -360,6 +377,13 @@ class LagetSeScraper:
             if desc:
                 description_parts.append(f"\n{desc}")
 
+            # Add attendees if available
+            attendees = reg.get('attendees', [])
+            if attendees:
+                description_parts.append(f"\n\nDeltagare ({len(attendees)}):")
+                for attendee in attendees:
+                    description_parts.append(f"• {attendee}")
+
             map_url = reg.get('map_url', '')
             if map_url:
                 description_parts.append(f"\n\nKarta: {map_url}")
@@ -461,6 +485,13 @@ def convert_registrations_to_events(registrations: List[Dict], scraper: LagetSeS
         desc = reg.get('description', '')
         if desc:
             description_parts.append(f"\n{desc}")
+
+        # Add attendees if available
+        attendees = reg.get('attendees', [])
+        if attendees:
+            description_parts.append(f"\n\nDeltagare ({len(attendees)}):")
+            for attendee in attendees:
+                description_parts.append(f"• {attendee}")
 
         map_url = reg.get('map_url', '')
         if map_url:
