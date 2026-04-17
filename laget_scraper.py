@@ -105,10 +105,15 @@ class LagetSeScraper:
                 # Extract parameters from URL
                 match = re.search(r'pk=(\d+)&childId=(\d+)&site=([^&]+)', href)
                 if match:
+                    # Extract team name from eventList__club element
+                    club_elem = link.find('p', class_='eventList__club')
+                    team_name = club_elem.text.strip() if club_elem else ''
+
                     registration_links.append({
                         'pk': match.group(1),
                         'childId': match.group(2),
                         'site': match.group(3),
+                        'team': team_name,
                         'url': f"{self.base_url}{href}" if href.startswith('/') else href
                     })
 
@@ -282,14 +287,28 @@ class LagetSeScraper:
 
         return start_dt, end_dt
 
-    def get_all_registrations(self) -> List[Dict]:
-        """Get all registrations with details"""
+    def get_all_registrations(self, team_filter: Optional[str] = None) -> List[Dict]:
+        """Get all registrations with details
+
+        Args:
+            team_filter: If provided, only fetch details for registrations matching this team name
+                        (case-insensitive partial match)
+        """
         if not self.logged_in:
             if not self.login():
                 return []
 
         # Get registration links
         links = self.get_registration_links()
+
+        # Filter by team early to avoid unnecessary HTTP requests
+        if team_filter:
+            team_lower = team_filter.lower()
+            original_count = len(links)
+            links = [l for l in links if team_lower in l.get('team', '').lower()]
+            excluded_count = original_count - len(links)
+            if excluded_count > 0:
+                console.print(f"[dim]Filtered to team '{team_filter}': kept {len(links)}, excluded {excluded_count} registration(s)[/dim]")
 
         registrations = []
         with Progress(
@@ -607,6 +626,16 @@ def scrape(
         "--google-credentials-file",
         help="Path to Google Calendar OAuth credentials JSON file"
     ),
+    child: Optional[str] = typer.Option(
+        None,
+        "--child",
+        help="Only include events for this child (case-insensitive partial match on child name)"
+    ),
+    team: Optional[str] = typer.Option(
+        None,
+        "--team",
+        help="Only include events for this team (case-insensitive partial match on team name)"
+    ),
 ):
     """
     Scrape registrations from laget.se and create an iCal calendar file.
@@ -640,11 +669,23 @@ def scrape(
     scraper = LagetSeScraper(email, password)
 
     # Get all registrations
-    registrations = scraper.get_all_registrations()
+    registrations = scraper.get_all_registrations(team_filter=team)
 
     if not registrations:
         console.print("\n[red]✗ No registrations found or failed to fetch data[/red]")
         raise typer.Exit(1)
+
+    # Filter by child name if specified
+    if child:
+        original_count = len(registrations)
+        child_lower = child.lower()
+        registrations = [r for r in registrations if child_lower in r.get('child_name', '').lower()]
+        excluded_count = original_count - len(registrations)
+        if excluded_count > 0:
+            console.print(f"[dim]Filtered to child '{child}': kept {len(registrations)}, excluded {excluded_count} event(s)[/dim]")
+        if not registrations:
+            console.print(f"\n[red]✗ No registrations found for child '{child}'[/red]")
+            raise typer.Exit(1)
 
     # Filter out practice events if not included
     if not include_practice:
